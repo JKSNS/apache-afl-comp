@@ -87,7 +87,7 @@ build_cmd() {
     local bin="$1"; shift
     local lib_path="$1"; shift
     local strategy="$1"; shift
-    local helper_bin="$2" # Optional
+    local helper_bin="${1:-}" 
 
     local env_prefix="LD_LIBRARY_PATH=${lib_path} "
     local args="-t 2000+ -m none -i '${INPUT_DIR}' -o '${OUTPUT_DIR}'"
