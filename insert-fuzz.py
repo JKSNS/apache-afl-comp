@@ -70,11 +70,21 @@ needle = re.compile(r"rv\s*=\s*apr_generate_random_bytes\s*\(\s*seed\s*,\s*sizeo
 disable_random = """
         // ---- PATCH -----
         // rv = apr_generate_random_bytes(seed, sizeof(seed));
-        char constant_seed[] = {0x78,0xAB,0xF5,0xDB,0xE2,0x7F,0xD2,0x8A};
-        memcpy(seed, constant_seed, sizeof(seed));
+        memcpy(seed, fuzz_constant_seed, sizeof(seed));
         rv = APR_SUCCESS;
         //-------------------------------------------------
 
 """
 replace_block_regex(core_file, needle, disable_random)
 print("[+] ./server/core.c is patched :^) \n")
+
+seed_declaration = """
+/* AFL: deterministic seed for fuzzing stability */
+static const unsigned char fuzz_constant_seed[8] = {0x78, 0xAB, 0xF5, 0xDB, 0xE2, 0x7F, 0xD2, 0x8A};
+
+"""
+
+core_text = core_file.read_text()
+if "fuzz_constant_seed" not in core_text:
+    core_text = core_text.replace("#include \"httpd.h\"\n", "#include \"httpd.h\"\n\n" + seed_declaration, 1)
+    core_file.write_text(core_text)
