@@ -224,6 +224,9 @@ echo "[*] Compiling Apache httpd (this may take a while)..."
 make -j "$(nproc)"
 make install
 
+# Clean
+rm -rf httpd-2.4.66
+
 echo ""
 echo "[+] Build complete!"
 echo "[+] Type: ${BUILD_TYPE}"
