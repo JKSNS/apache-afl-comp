@@ -203,9 +203,6 @@ echo "[*] Applying fuzzing patches..."
 chmod +x ../insert-fuzz.py
 ../insert-fuzz.py
 
-echo "[*] Patching missing fuzz_constant_seed in server/core.c..."
-sed -i '1s/^/const char *fuzz_constant_seed = "fuzz";\n/' server/core.c
-
 # Configure Apache
 echo "[*] Configuring Apache httpd..."
 make clean >/dev/null 2>&1 || true
