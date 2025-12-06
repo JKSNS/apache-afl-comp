@@ -50,10 +50,13 @@ case "$BUILD_TYPE" in
         ;;
 esac
 
+DEPS_DIR="deps-dir-${BUILD_TYPE}"
+
 # Use non-instrumented compilers for third-party dependencies to avoid AFL
 # runtime symbols (e.g., __afl_area_ptr) leaking into shared objects and
 # breaking relinking steps. httpd itself is still built with the AFL
-# instrumented compiler chosen above.
+# instrumented compiler chosen above. We also strip AFL instrumentation
+# environment variables from dependency builds to keep them "clean".
 DEP_CC=${DEP_CC:-clang}
 DEP_CXX=${DEP_CXX:-clang++}
 
@@ -88,6 +91,7 @@ export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
 
 echo "[*] Building Apache httpd with BUILD_TYPE=${BUILD_TYPE}"
 echo "[*] Installation prefix: ${PREFIX}"
+echo "[*] Dependency build directory: ${DEPS_DIR}"
 
 if [[ "${SKIP_APT}" -ne 1 ]]; then
     apt-get update
@@ -117,14 +121,16 @@ cd "./httpd-${HTTPD_VER}/"
 
 if [[ ${CLEAN_DEPS} -eq 1 ]]; then
     echo "[*] CLEAN_DEPS=1, removing previous dependency builds"
-    rm -rf deps-dir
+    rm -rf "${DEPS_DIR}"
 fi
 
-mkdir -p deps-dir/
-cd ./deps-dir
+mkdir -p "${DEPS_DIR}"
+cd "./${DEPS_DIR}"
 
 build_dep() {
     local name="$1" archive="$2" url_list="$3" prefix="$4" configure_args="$5" extract_cmd="$6"
+
+    local -a clean_env=(env -u AFL_LLVM_CMPLOG -u AFL_LLVM_LAF_ALL -u AFL_LLVM_DICT2FILE -u AFL_LLVM_ALLOWLIST -u AFL_LLVM_INSTRUMENT_FILE -u AFL_USE_ASAN -u AFL_USE_MSAN -u AFL_USE_UBSAN -u AFL_MAP_SIZE)
 
     # shellcheck disable=SC2206
     local urls=(${url_list})
@@ -142,12 +148,15 @@ build_dep() {
     fi
 
     cd "${name}"/
-    if [[ ! -f Makefile ]]; then
-        CC="${DEP_CC}" CXX="${DEP_CXX}" \
+    if [[ -f Makefile ]]; then
+        "${clean_env[@]}" make distclean >/dev/null 2>&1 || true
+    fi
+
+    "${clean_env[@]}" CC="${DEP_CC}" CXX="${DEP_CXX}" \
         CFLAGS="${DEP_CFLAGS}" CXXFLAGS="${DEP_CXXFLAGS}" LDFLAGS="${DEP_LDFLAGS}" \
         ./configure --prefix="${prefix}" ${configure_args}
-    fi
-    make -j "$(nproc)" && make install
+
+    "${clean_env[@]}" make -j "$(nproc)" && "${clean_env[@]}" make install
     cd ..
 }
 
@@ -189,6 +198,7 @@ chmod +x ../insert-fuzz.py
 
 # Configure Apache
 echo "[*] Configuring Apache httpd..."
+make clean >/dev/null 2>&1 || true
 ./configure --with-apr="${PREFIX}/apr/" \
             --with-apr-util="${PREFIX}/apr-util/" \
             --with-expat="${PREFIX}/expat/" \
