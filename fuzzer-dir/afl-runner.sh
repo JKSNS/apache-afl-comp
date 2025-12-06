@@ -94,7 +94,8 @@ build_cmd() {
     
     # Master specific args
     if [[ "$is_master" == "1" ]]; then
-        args="${args} -M master -x '${DICTIONARY}' AFL_FINAL_SYNC=1"
+        env_prefix="${env_prefix} AFL_FINAL_SYNC=1 "
+        args="${args} -M master -x '${DICTIONARY}'"
         if [[ -n "$helper_bin" ]]; then
             args="${args} -c '${helper_bin}'"
         fi
@@ -150,9 +151,13 @@ fi
 
 echo ""
 if [[ ${USE_SCREEN} -eq 0 ]]; then
-    echo "[+] Fuzzing has started. Master log is tailing below."
-    echo "[+] Press Ctrl+C to stop."
+    echo "[+] Fuzzing has started in BACKGROUND mode."
+    echo "[+] To see stats, run: watch -n 1 afl-whatsup ${OUTPUT_DIR}"
+    echo "[+] Master log is tailing below (Ctrl+C to stop tailing, fuzzer keeps running):"
     sleep 2
-    # Determine which log file to tail
     tail -f "${FUZZ_ROOT}/logs/afl-master.log"
+else
+    echo "[+] Fuzzing started in SCREEN mode."
+    echo "[+] Use 'screen -ls' to list instances."
+    echo "[+] Use 'screen -r afl-master' to view the UI."
 fi
