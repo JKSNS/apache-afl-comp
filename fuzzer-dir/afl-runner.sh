@@ -10,6 +10,9 @@ USE_SCREEN=${USE_SCREEN:-0}
 MODE=""
 SECONDARIES=${SECONDARIES:-4}
 FUZZ_ROOT=/tmp/httpd-fuzz-root
+
+export LD_LIBRARY_PATH="/usr/local/apache_plain/lib:/usr/local/apache_asan/lib:/usr/local/apache_cmplog/lib:/usr/local/apache_compcov/lib:${LD_LIBRARY_PATH:-}"
+
 mkdir -p "${FUZZ_ROOT}/logs" "${FUZZ_ROOT}/htdocs"
 if [[ ! -f "${FUZZ_ROOT}/htdocs/index.html" ]]; then
     echo "AFL httpd fuzz target" >"${FUZZ_ROOT}/htdocs/index.html"
@@ -51,28 +54,26 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "[!] Unknown argument: $1"
-            echo "    Supported: --mode (asan|cmplog|plain), --secondaries N, --screen, --no-screen, --output DIR, --input DIR, --conf FILE, --dict FILE"
+            echo "    Supported: --mode (asan|cmplog|compcov|plain), --secondaries N, --screen, --no-screen, --output DIR, --input DIR, --conf FILE, --dict FILE"
             exit 1
             ;;
     esac
 done
 
-# Binaries
 HTTPD_ASAN=/usr/local/apache_asan/bin/httpd
 HTTPD_CMPLOG=/usr/local/apache_cmplog/bin/httpd
 HTTPD_PLAIN=/usr/local/apache_plain/bin/httpd
+HTTPD_COMPCOV=/usr/local/apache_compcov/bin/httpd
 
 # Detect available binaries
 AVAILABLE_BUILDS=()
 [[ -x "$HTTPD_ASAN" ]] && AVAILABLE_BUILDS+=("asan")
 [[ -x "$HTTPD_CMPLOG" ]] && AVAILABLE_BUILDS+=("cmplog")
 [[ -x "$HTTPD_PLAIN" ]] && AVAILABLE_BUILDS+=("plain")
+[[ -x "$HTTPD_COMPCOV" ]] && AVAILABLE_BUILDS+=("compcov")
 
 if [[ ${#AVAILABLE_BUILDS[@]} -eq 0 ]]; then
-    echo "[!] No Apache builds found. Run afl-toolchain.sh first:"
-    echo "    BUILD_TYPE=asan ./afl-toolchain.sh"
-    echo "    BUILD_TYPE=cmplog ./afl-toolchain.sh"
-    echo "    BUILD_TYPE=plain ./afl-toolchain.sh"
+    echo "[!] No Apache builds found. Run afl-toolchain.sh first."
     exit 1
 fi
 
@@ -89,6 +90,7 @@ if [[ -n "$MODE" ]]; then
         exit 1
     fi
 else
+    # Auto-select preference
     if [[ " ${AVAILABLE_BUILDS[*]} " =~ " plain " ]]; then
         MODE=plain
     elif [[ " ${AVAILABLE_BUILDS[*]} " =~ " asan " ]]; then
@@ -98,10 +100,13 @@ else
     fi
 fi
 
+# Tunables for stability
 export AFL_MAP_SIZE=262144
 export AFL_SKIP_CPUFREQ=1
 export AFL_DISABLE_TRIM=1
 export AFL_AUTORESUME=1
+# Force ASan to be less whiny during startup
+export ASAN_OPTIONS=detect_leaks=0:abort_on_error=1:symbolize=0:allocator_may_return_null=1
 
 # Kill existing AFL instances
 pkill -9 afl-fuzz 2>/dev/null || true
@@ -160,9 +165,11 @@ case "$MODE" in
     plain)
         MASTER_BIN="$HTTPD_PLAIN"
         ;;
+    compcov)
+        MASTER_BIN="$HTTPD_COMPCOV"
+        ;;
     asan)
         MASTER_BIN="$HTTPD_ASAN"
-        MASTER_ENV="ASAN_OPTIONS=detect_leaks=0,abort_on_error=1,symbolize=0 "
         ;;
 esac
 
@@ -179,15 +186,10 @@ SESSIONS=()
 SLAVE_COUNT=0
 
 declare -a SLAVE_TARGETS=()
-if [[ -x "$HTTPD_ASAN" ]]; then
-    SLAVE_TARGETS+=("asan")
-fi
-if [[ -x "$HTTPD_PLAIN" ]]; then
-    SLAVE_TARGETS+=("plain")
-fi
-if [[ -x "$HTTPD_CMPLOG" ]]; then
-    SLAVE_TARGETS+=("cmplog")
-fi
+if [[ -x "$HTTPD_ASAN" ]]; then SLAVE_TARGETS+=("asan"); fi
+if [[ -x "$HTTPD_PLAIN" ]]; then SLAVE_TARGETS+=("plain"); fi
+if [[ -x "$HTTPD_CMPLOG" ]]; then SLAVE_TARGETS+=("cmplog"); fi
+if [[ -x "$HTTPD_COMPCOV" ]]; then SLAVE_TARGETS+=("compcov"); fi
 
 if [[ ${SECONDARIES} -gt 0 && ${#SLAVE_TARGETS[@]} -gt 0 ]]; then
     for i in $(seq 1 ${SECONDARIES}); do
@@ -195,22 +197,27 @@ if [[ ${SECONDARIES} -gt 0 && ${#SLAVE_TARGETS[@]} -gt 0 ]]; then
         target="${SLAVE_TARGETS[$target_index]}"
         SLAVE_COUNT=$((SLAVE_COUNT + 1))
         name="slave${SLAVE_COUNT}"
+        
+        env_prefix=""
+        strategy="fast"
+        bin=""
 
         case "$target" in
             asan)
-                env_prefix="ASAN_OPTIONS=detect_leaks=0,abort_on_error=1,symbolize=0 "
                 strategy="exploit"
                 bin="$HTTPD_ASAN"
                 ;;
             plain)
-                env_prefix=""
                 strategy="fast"
                 bin="$HTTPD_PLAIN"
                 ;;
             cmplog)
-                env_prefix=""
                 strategy="explore"
                 bin="$HTTPD_CMPLOG"
+                ;;
+            compcov)
+                strategy="coe"
+                bin="$HTTPD_COMPCOV"
                 ;;
         esac
 
