@@ -1,151 +1,124 @@
 /* AFL fuzzing helpers injected into httpd */
 
-#include <arpa/inet.h>
-#include <errno.h>
-#include <net/if.h>
-#include <net/route.h>
-#include <netinet/ip6.h>
-#include <netinet/tcp.h>
-#include <sched.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <strings.h>
-#include <sys/ioctl.h>
-#include <sys/mount.h>
-#include <sys/resource.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <sys/wait.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <signal.h>
 
-static void net_iface_up(const char *ifacename)
-{
-    int sock;
-    struct ifreq ifr;
+#define FUZZING_PORT 8080
+#define MAX_INPUT_SIZE (1024 * 128)  // 128KB
 
-    sock = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
-    if (sock == -1) {
-        perror("socket(AF_INET, SOCK_STREAM, IPPROTO_IP)");
-        exit(1);
+static int global_socket_fd = -1;
+static volatile int should_exit = 0;
+
+__AFL_FUZZ_INIT();
+
+static void cleanup_handler(int sig) {
+    should_exit = 1;
+    if (global_socket_fd >= 0) {
+        close(global_socket_fd);
     }
-
-    memset(&ifr, 0, sizeof(ifr));
-    snprintf(ifr.ifr_name, IF_NAMESIZE, "%s", ifacename);
-
-    if (ioctl(sock, SIOCGIFFLAGS, &ifr) == -1) {
-        perror("ioctl(iface='lo', SIOCGIFFLAGS, IFF_UP)");
-        exit(1);
-    }
-
-    ifr.ifr_flags |= (IFF_UP | IFF_RUNNING);
-
-    if (ioctl(sock, SIOCSIFFLAGS, &ifr) == -1) {
-        perror("ioctl(iface='lo', SIOCSIFFLAGS, IFF_UP)");
-        exit(1);
-    }
-
-    close(sock);
+    _exit(0);
 }
 
-static void unsh(void)
-{
-    unshare(CLONE_NEWUSER | CLONE_NEWNET | CLONE_NEWNS);
-
-    if (mount("tmpfs", "/tmp", "tmpfs", 0, "") == -1) {
-        perror("tmpfs");
-        exit(1);
+static void *fuzzer_thread(void *arg) {
+    struct sockaddr_in addr;
+    int listen_fd, conn_fd;
+    
+    signal(SIGTERM, cleanup_handler);
+    signal(SIGINT, cleanup_handler);
+    
+    listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (listen_fd < 0) {
+        perror("socket");
+        return NULL;
     }
-    net_iface_up("lo");
+    
+    int opt = 1;
+    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(FUZZING_PORT);
+    
+    if (bind(listen_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        perror("bind");
+        close(listen_fd);
+        return NULL;
+    }
+    
+    if (listen(listen_fd, 5) < 0) {
+        perror("listen");
+        close(listen_fd);
+        return NULL;
+    }
+    
+    fprintf(stderr, "[*] Fuzzer thread listening on 127.0.0.1:%d\n", FUZZING_PORT);
+    
+#ifdef __AFL_HAVE_MANUAL_CONTROL
+    __AFL_INIT();
+#endif
+    
+    unsigned char *buf = __AFL_FUZZ_TESTCASE_BUF;
+    
+    while (__AFL_LOOP(10000)) {   Increased from 1000
+        int len = __AFL_FUZZ_TESTCASE_LEN;
+        
+        if (len > MAX_INPUT_SIZE) {
+            len = MAX_INPUT_SIZE;
+        }
+        
+        conn_fd = accept(listen_fd, NULL, NULL);
+        if (conn_fd < 0) {
+            if (should_exit) break;
+            continue;
+        }
+        
+        global_socket_fd = conn_fd;
+        
+        // Send fuzzing input
+        ssize_t sent = 0;
+        while (sent < len) {
+            ssize_t n = write(conn_fd, buf + sent, len - sent);
+            if (n <= 0) break;
+            sent += n;
+        }
+        
+        // Give server time to process
+        usleep(1000);  // 1ms, tune if necessary
+        
+        close(conn_fd);
+        global_socket_fd = -1;
+    }
+    
+    close(listen_fd);
+    return NULL;
 }
 
-static void *fuzzer_thread(void *unused)
-{
-    const int BUFSIZE = 1024 * 1024;
-    char buf[BUFSIZE + 1];
-    char b[1024 * 1024];
-    ssize_t read_bytes;
-    int sockfd;
-    int sz = (1024 * 1024);
-    struct sockaddr_in saddr;
-
-    (void)unused;
-    usleep(10000);
-
-    while (__AFL_LOOP(10000)) {
-        printf("[+] Looping\n");
-        memset(buf, 0, (size_t)BUFSIZE);
-        read_bytes = read(0, buf, (size_t)BUFSIZE);
-        buf[BUFSIZE - 2] = '\r';
-        buf[BUFSIZE - 1] = '\n';
-        buf[BUFSIZE] = '\0';
-
-        sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
-        if (sockfd == -1) {
-            perror("socket");
-            exit(1);
-        }
-
-        if (setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, &sz, sizeof(sz)) == -1) {
-            perror("setsockopt");
-            exit(1);
-        }
-
-        printf("[+] Connecting\n");
-
-        saddr.sin_family = AF_INET;
-        saddr.sin_port = htons(80);
-        saddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        while (connect(sockfd, (struct sockaddr *)&saddr, sizeof(saddr)) == -1) {
-            perror("connect");
-            usleep(100000);
-        }
-
-        printf("[+] Sending buf %s\n", buf);
-
-        if (send(sockfd, buf, (size_t)read_bytes, MSG_NOSIGNAL) != read_bytes) {
-            perror("send() failed 1");
-            exit(1);
-        }
-
-        if (shutdown(sockfd, SHUT_WR) == -1) {
-            perror("shutdown");
-            exit(1);
-        }
-
-        while (recv(sockfd, b, sizeof(b), MSG_WAITALL) > 0) {
-            /* keep draining */
-        }
-
-        printf("[+] Received %s\n", b);
-        close(sockfd);
-    }
-    printf("[+] Done\n");
-    usleep(100000);
-    exit(0);
-}
-
-static void launch_fuzzy_thread(void)
-{
-    pthread_t t;
+static void launch_fuzzy_thread(void) {
+    pthread_t tid;
     pthread_attr_t attr;
-
+    
     pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, 1024 * 1024 * 8);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-
-    pthread_create(&t, &attr, fuzzer_thread, NULL);
+    
+    if (pthread_create(&tid, &attr, fuzzer_thread, NULL) != 0) {
+        fprintf(stderr, "[!] Failed to create fuzzer thread\n");
+        exit(1);
+    }
+    
+    pthread_attr_destroy(&attr);
+    
+    // Give thread time to set up
+    sleep(1);
 }
 
-__attribute__((constructor)) static void start_afl_fuzzing(void)
-{
-    if (getenv("NO_FUZZ") == NULL) {
-        unsh();
+__attribute__((constructor))
+static void start_afl_fuzzing(void) {
+    if (getenv("__AFL_SHM_ID") != NULL) {
+        fprintf(stderr, "[+] AFL detected, launching fuzzing thread\n");
         launch_fuzzy_thread();
-        printf("[+] Launched AFL loop\n");
     }
-    printf("[+] Continue with normal apache execution\n");
 }
