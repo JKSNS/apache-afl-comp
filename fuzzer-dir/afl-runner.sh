@@ -13,15 +13,12 @@ SECONDARIES=${SECONDARIES:-4}
 MODE=""
 
 # Dynamic User Handling 
-# We need to know who Apache should run as.
 ACTUAL_USER=$(whoami)
 if [[ "$ACTUAL_USER" == "root" ]]; then
-    # Apache cannot run as root, so we must use a low-privilege user
     APACHE_USER="daemon"
     APACHE_GROUP="daemon"
     echo "[*] Running as root. Apache will drop privileges to user: ${APACHE_USER}"
 else
-    # Running as a normal user so Apache should just be that user
     APACHE_USER="$ACTUAL_USER"
     APACHE_GROUP=$(id -gn)
     echo "[*] Running as ${APACHE_USER}. Apache will run with your privileges."
@@ -39,20 +36,13 @@ if [[ ! -f "${FUZZ_ROOT}/htdocs/index.html" ]]; then
 fi
 
 # Dynamic Config Generation 
-# We patch the config file on the fly to match the current user
 echo "[*] Updating ${CONF_FILE} with user ${APACHE_USER}..."
-
-# Remove existing User/Group lines to avoid duplicates
 sed -i '/^User /d' "${CONF_FILE}"
 sed -i '/^Group /d' "${CONF_FILE}"
-
-# Insert correct User/Group at the top
-# If running as root, we MUST set User/Group. 
-# If non-root, we usually don't need to, but setting them to the current user is safe.
 sed -i "1i User ${APACHE_USER}" "${CONF_FILE}"
 sed -i "2i Group ${APACHE_GROUP}" "${CONF_FILE}"
 
-# Fix Permissions so Apache can read/write what it needs
+# Fix Permissions
 chown -R "${APACHE_USER}:${APACHE_GROUP}" "${FUZZ_ROOT}"
 chown -R "${APACHE_USER}:${APACHE_GROUP}" "${SCRIPT_DIR}/out-dir" 2>/dev/null || true
 
@@ -71,7 +61,6 @@ LIB_COMPCOV="/usr/local/apache_compcov/apr/lib:/usr/local/apache_compcov/apr-uti
 
 # Pre-Flight Check
 echo "[*] Performing Pre-Flight Check..."
-# We test the PLAIN build to ensure libraries and config are valid
 if ! LD_LIBRARY_PATH="${LIB_PLAIN}" ${HTTPD_PLAIN} -v >/dev/null 2>&1; then
     echo "[-] CRITICAL ERROR: Apache failed to start."
     echo "    Run this command manually to see the error:"
@@ -111,6 +100,9 @@ if [[ -z "$MODE" ]]; then
 fi
 
 # Tunables
+# Disable Forkserver to prevent thread death
+export AFL_NO_FORKSRV=1
+export AFL_TRY_AFFINITY=1
 export AFL_MAP_SIZE=262144
 export AFL_SKIP_CPUFREQ=1
 export AFL_DISABLE_TRIM=1
