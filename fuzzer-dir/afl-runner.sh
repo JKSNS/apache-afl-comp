@@ -6,6 +6,11 @@ INPUT_DIR=${INPUT_DIR:-${SCRIPT_DIR}/input-cases/}
 OUTPUT_DIR=${OUTPUT_DIR:-${SCRIPT_DIR}/out-dir}
 DICTIONARY=${DICTIONARY:-${SCRIPT_DIR}/dict/http_request_fuzzer.dict.txt}
 CONF_FILE=${CONF_FILE:-${SCRIPT_DIR}/conf/default.conf}
+FUZZ_ROOT=/tmp/httpd-fuzz-root
+mkdir -p "${FUZZ_ROOT}/logs" "${FUZZ_ROOT}/htdocs"
+if [[ ! -f "${FUZZ_ROOT}/htdocs/index.html" ]]; then
+    echo "AFL httpd fuzz target" >"${FUZZ_ROOT}/htdocs/index.html"
+fi
 
 # Binaries
 HTTPD_ASAN=/usr/local/apache_asan/bin/httpd

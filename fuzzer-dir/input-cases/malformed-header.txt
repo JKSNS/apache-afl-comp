@@ -1,0 +1,5 @@
+GET /%2e%2e HTTP/1.0
+Host: localhost
+X-Test: value
+Bad-Header
+

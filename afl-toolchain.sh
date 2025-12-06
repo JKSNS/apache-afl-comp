@@ -2,13 +2,19 @@
 set -euo pipefail
 
 BUILD_TYPE=${BUILD_TYPE:-asan}
+CLEAN_DEPS=${CLEAN_DEPS:-0}
+HTTPD_VER="2.4.66"
+APR_VER="1.7.6"
+APR_UTIL_VER="1.6.3"
+EXPAT_VER="2.6.2"
+PCRE2_VER="10.44"
 
 case "$BUILD_TYPE" in
     asan)
         export CC=afl-clang-fast
         export CXX=afl-clang-fast++
-        export CFLAGS="-g -fsanitize=address -fno-sanitize-recover=all -std=gnu99 -Wno-error=declaration-after-statement"
-        export CXXFLAGS="-g -fsanitize=address -fno-sanitize-recover=all"
+        export CFLAGS="-O2 -g -fsanitize=address -fno-sanitize-recover=all -std=gnu99 -Wno-error=declaration-after-statement"
+        export CXXFLAGS="-O2 -g -fsanitize=address -fno-sanitize-recover=all -Wno-error=declaration-after-statement"
         export LDFLAGS="-fsanitize=address -fno-sanitize-recover=all -lm"
         PREFIX=/usr/local/apache_asan
         ;;
@@ -16,8 +22,8 @@ case "$BUILD_TYPE" in
         export CC=afl-clang-fast
         export CXX=afl-clang-fast++
         export AFL_LLVM_CMPLOG=1
-        export CFLAGS="-g -std=gnu99 -Wno-error=declaration-after-statement"
-        export CXXFLAGS="-g"
+        export CFLAGS="-O2 -g -std=gnu99 -Wno-error=declaration-after-statement"
+        export CXXFLAGS="-O2 -g -Wno-error=declaration-after-statement"
         export LDFLAGS="-lm"
         PREFIX=/usr/local/apache_cmplog
         ;;
@@ -25,30 +31,38 @@ case "$BUILD_TYPE" in
         export CC=afl-clang-lto
         export CXX=afl-clang-lto++
         export AFL_LLVM_LAF_ALL=1
-        export CFLAGS="-g -std=gnu99 -Wno-error=declaration-after-statement"
-        export CXXFLAGS="-g"
+        export CFLAGS="-O2 -g -std=gnu99 -Wno-error=declaration-after-statement"
+        export CXXFLAGS="-O2 -g -Wno-error=declaration-after-statement"
         export LDFLAGS="-lm"
         PREFIX=/usr/local/apache_compcov
         ;;
     plain)
         export CC=afl-clang-fast
         export CXX=afl-clang-fast++
-        export CFLAGS="-g -std=gnu99 -Wno-error=declaration-after-statement"
-        export CXXFLAGS="-g"
+        export CFLAGS="-O2 -g -std=gnu99 -Wno-error=declaration-after-statement"
+        export CXXFLAGS="-O2 -g -Wno-error=declaration-after-statement"
         export LDFLAGS="-lm"
         PREFIX=/usr/local/apache_plain
         ;;
+    *)
+        echo "[!] Unknown BUILD_TYPE: ${BUILD_TYPE}" >&2
+        exit 1
+        ;;
 esac
-
-# Versions
-HTTPD_VER="2.4.66"
-APR_VER="1.7.6"
-APR_UTIL_VER="1.6.3"
-EXPAT_VER="2.6.2"
-PCRE2_VER="10.44"
 
 BUILD_DEPS=(build-essential libtool-bin brotli libbrotli-dev libxml2-dev libssl-dev wget curl xz-utils)
 SKIP_APT=${SKIP_APT:-0}
+
+download_with_fallback() {
+    local archive="$1"; shift
+    for url in "$@"; do
+        echo "    [+] Fetching ${archive} from ${url}"
+        if curl -fL "${url}" -o "${archive}"; then
+            return 0
+        fi
+    done
+    return 1
+}
 
 export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
 
@@ -64,12 +78,14 @@ fi
 
 mkdir -p "${PREFIX}"
 
-# Download httpd
 HTTPD_ARCHIVE="httpd-${HTTPD_VER}.tar.gz"
 if [[ ! -d "httpd-${HTTPD_VER}" ]]; then
     if [[ ! -f "${HTTPD_ARCHIVE}" ]]; then
         echo "[*] Downloading Apache httpd ${HTTPD_VER}..."
-        curl -fL "https://dlcdn.apache.org/httpd/${HTTPD_ARCHIVE}" -o "${HTTPD_ARCHIVE}"
+        download_with_fallback "${HTTPD_ARCHIVE}" \
+            "https://dlcdn.apache.org/httpd/${HTTPD_ARCHIVE}" \
+            "https://archive.apache.org/dist/httpd/${HTTPD_ARCHIVE}" \
+            "https://downloads.apache.org/httpd/${HTTPD_ARCHIVE}" || { echo "[!] Failed to download httpd"; exit 1; }
     fi
     echo "[*] Extracting Apache httpd..."
     tar -xzf "${HTTPD_ARCHIVE}"
@@ -78,83 +94,73 @@ else
 fi
 
 cd "./httpd-${HTTPD_VER}/"
+
+if [[ ${CLEAN_DEPS} -eq 1 ]]; then
+    echo "[*] CLEAN_DEPS=1, removing previous dependency builds"
+    rm -rf deps-dir
+fi
+
 mkdir -p deps-dir/
 cd ./deps-dir
 
-# APR
-echo "[*] Building APR ${APR_VER}..."
-APR_ARCHIVE="apr-${APR_VER}.tar.gz"
-if [[ ! -d "apr" ]]; then
-    if [[ ! -f "${APR_ARCHIVE}" ]]; then
-        curl -fL "https://dlcdn.apache.org/apr/${APR_ARCHIVE}" -o "${APR_ARCHIVE}"
-    fi
-    tar -xzf "${APR_ARCHIVE}"
-    mv "./apr-${APR_VER}" apr
-fi
-cd apr/
-if [[ ! -f "Makefile" ]]; then
-    ./configure --prefix="${PREFIX}/apr/"
-fi
-make -j "$(nproc)" && make install
-cd ..
+build_dep() {
+    local name="$1" archive="$2" url_list="$3" prefix="$4" configure_args="$5" extract_cmd="$6"
 
-# APR-UTIL
-echo "[*] Building APR-UTIL ${APR_UTIL_VER}..."
-APR_UTIL_ARCHIVE="apr-util-${APR_UTIL_VER}.tar.gz"
-if [[ ! -d "apr-util" ]]; then
-    if [[ ! -f "${APR_UTIL_ARCHIVE}" ]]; then
-        curl -fL "https://dlcdn.apache.org/apr/${APR_UTIL_ARCHIVE}" -o "${APR_UTIL_ARCHIVE}"
-    fi
-    tar -xzf "${APR_UTIL_ARCHIVE}"
-    mv "./apr-util-${APR_UTIL_VER}" apr-util
-fi
-cd apr-util/
-if [[ ! -f "Makefile" ]]; then
-    ./configure --prefix="${PREFIX}/apr-util/" --with-apr="${PREFIX}/apr/"
-fi
-make -j "$(nproc)" && make install
-cd ..
+    # shellcheck disable=SC2206
+    local urls=(${url_list})
 
-# EXPAT
-echo "[*] Building EXPAT ${EXPAT_VER}..."
-EXPAT_ARCHIVE="expat-${EXPAT_VER}.tar.xz"
-if [[ ! -d "expat" ]]; then
-    if [[ ! -f "${EXPAT_ARCHIVE}" ]]; then
-        curl -fL "https://github.com/libexpat/libexpat/releases/download/R_${EXPAT_VER//./_}/${EXPAT_ARCHIVE}" -o "${EXPAT_ARCHIVE}"
+    echo "[*] Building ${name}..."
+    if [[ ! -d "${name}" ]]; then
+        if [[ ! -f "${archive}" ]]; then
+            download_with_fallback "${archive}" "${urls[@]}" || { echo "[!] Failed to download ${archive}"; exit 1; }
+        fi
+        echo "    [+] Extracting ${archive}"
+        eval "${extract_cmd}"
+        mv "${name}"-*/ "${name}"
+    else
+        echo "    [+] Reusing existing ${name} directory"
     fi
-    tar -xJf "${EXPAT_ARCHIVE}"
-    mv "./expat-${EXPAT_VER}" expat
-fi
-cd expat/
-if [[ ! -f "Makefile" ]]; then
-    ./configure --prefix="${PREFIX}/expat/"
-fi
-make -j "$(nproc)" && make install
-cd ..
 
-# PCRE2
-echo "[*] Building PCRE2 ${PCRE2_VER}..."
-PCRE2_ARCHIVE="pcre2-${PCRE2_VER}.tar.gz"
-if [[ ! -d "pcre2" ]]; then
-    if [[ ! -f "${PCRE2_ARCHIVE}" ]]; then
-        curl -fL "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-${PCRE2_VER}/${PCRE2_ARCHIVE}" -o "${PCRE2_ARCHIVE}"
+    cd "${name}"/
+    if [[ ! -f Makefile ]]; then
+        ./configure --prefix="${prefix}" ${configure_args}
     fi
-    tar -xzf "${PCRE2_ARCHIVE}"
-    mv "./pcre2-${PCRE2_VER}" pcre2
-fi
-cd pcre2/
-if [[ ! -f "Makefile" ]]; then
-    ./configure --prefix="${PREFIX}/pcre2/"
-fi
-make -j "$(nproc)" && make install
-cd ..
+    make -j "$(nproc)" && make install
+    cd ..
+}
+
+build_dep "apr" "apr-${APR_VER}.tar.gz" \
+    "https://dlcdn.apache.org/apr/apr-${APR_VER}.tar.gz https://archive.apache.org/dist/apr/apr-${APR_VER}.tar.gz" \
+    "${PREFIX}/apr/" "" "tar -xzf apr-${APR_VER}.tar.gz"
+
+build_dep "apr-util" "apr-util-${APR_UTIL_VER}.tar.gz" \
+    "https://dlcdn.apache.org/apr/apr-util-${APR_UTIL_VER}.tar.gz https://archive.apache.org/dist/apr/apr-util-${APR_UTIL_VER}.tar.gz" \
+    "${PREFIX}/apr-util/" "--with-apr=${PREFIX}/apr/" "tar -xzf apr-util-${APR_UTIL_VER}.tar.gz"
+
+build_dep "expat" "expat-${EXPAT_VER}.tar.xz" \
+    "https://github.com/libexpat/libexpat/releases/download/R_${EXPAT_VER//./_}/expat-${EXPAT_VER}.tar.xz https://sourceforge.net/projects/expat/files/expat/${EXPAT_VER}/expat-${EXPAT_VER}.tar.xz/download" \
+    "${PREFIX}/expat/" "" "tar -xJf expat-${EXPAT_VER}.tar.xz"
+
+build_dep "pcre2" "pcre2-${PCRE2_VER}.tar.gz" \
+    "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-${PCRE2_VER}/pcre2-${PCRE2_VER}.tar.gz https://sourceforge.net/projects/pcre/files/pcre2/${PCRE2_VER}/pcre2-${PCRE2_VER}.tar.gz/download" \
+    "${PREFIX}/pcre2/" "" "tar -xzf pcre2-${PCRE2_VER}.tar.gz"
 
 export PATH="${PREFIX}/pcre2/bin:${PATH}"
 export LD_LIBRARY_PATH="${PREFIX}/pcre2/lib:${PREFIX}/apr/lib:${PREFIX}/apr-util/lib:${PREFIX}/expat/lib:${LD_LIBRARY_PATH}"
 
 cd ../
 
+if [[ ${CLEAN_DEPS} -eq 1 ]]; then
+    echo "[*] CLEAN_DEPS=1, cleaning httpd build directory"
+    make distclean >/dev/null 2>&1 || true
+fi
+
 # Apply fuzzing patches
+if [[ ! -f server/main.c ]]; then
+    echo "[!] Run this script from the httpd source root." >&2
+    exit 1
+fi
+
 echo "[*] Applying fuzzing patches..."
 chmod +x ../insert-fuzz.py
 ../insert-fuzz.py
@@ -170,7 +176,7 @@ echo "[*] Configuring Apache httpd..."
             --disable-so \
             --with-mpm=prefork \
             --enable-static-support \
-            --enable-mods-static=reallyall \
+            --enable-mods-static=most \
             --enable-debugger-mode \
             --with-crypto --with-openssl \
             --disable-shared
