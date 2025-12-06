@@ -1,27 +1,62 @@
 # apache-afl
 
-This fork extends **0xbigshaq**'s Apache fuzzing automation to newer httpd and AFL++ releases. It builds, patches, and fuzzes Apache httpd with AFL++ in one place.
+This fork extends **0xbigshaq**'s Apache fuzzing automation to newer httpd and AFL++ releases. It downloads, patches, and builds Apache httpd with AFL++ instrumentation, plus the deps it needs (APR, APR-util, Expat, PCRE2) in isolated prefixes.
 
-## Quick start
-Run the toolchain (ASan build by default):
-```
-./afl-toolchain.sh
-```
-Use other modes by setting `BUILD_TYPE=asan|cmplog|compcov|plain`.
+## Prerequisites
+- AFL++ with `afl-clang-fast` and `afl-clang-lto` on PATH
+- Internet access for downloads (or place the tarballs next to the scripts)
+- Debian/Ubuntu toolchain packages (installed automatically unless you opt out)
 
-If your environment already has build dependencies, skip apt:
-```
+If your environment blocks `apt`, reuse pre-installed packages:
+```bash
 SKIP_APT=1 ./afl-toolchain.sh
 ```
 
-## Fuzzing
+## Build httpd (copy/paste)
+Default AddressSanitizer build:
+```bash
+./afl-toolchain.sh
 ```
+
+Other instrumentation presets:
+```bash
+BUILD_TYPE=cmplog   ./afl-toolchain.sh   # cmpcov companion for differential stage
+BUILD_TYPE=compcov  ./afl-toolchain.sh   # laf-intel/compcov build
+BUILD_TYPE=plain    ./afl-toolchain.sh   # coverage-only baseline
+```
+
+Cleanup and recompile everything:
+```bash
+CLEAN_DEPS=1 ./afl-toolchain.sh
+```
+
+Artifacts install under `/usr/local/apache_<mode>/` with the patched `httpd` in `bin/`.
+
+## Fuzzing quick start
+Seeds and configs live in `fuzzer-dir/` by default.
+```bash
 cd fuzzer-dir/
 ./afl-runner.sh
 ```
-`run-fuzz.sh` offers a richer multi-instance runner; see `--help` for options.
+
+`afl-runner.sh` is a light wrapper for a single AFL++ instance. For multi-instance runs and more tuning, use `run-fuzz.sh` from repo root:
+```bash
+./run-fuzz.sh --mode asan --secondaries 2
+```
+Key options (mix and match):
+- `--mode asan|cmplog|compcov|plain` selects which build to fuzz.
+- `--input-dir <dir>` / `--output-dir <dir>` override corpus/output roots.
+- `--dictionary <path>` points AFL++ to an HTTP request dictionary (default lives in `fuzzer-dir/dict/`).
+- `--conf <path>` points to the Apache config (default: `fuzzer-dir/conf/default.conf`).
+- `--power explore|fast|exploit`, `--timeout-ms <ms>`, `--mem-limit <val>` tune AFL++ knobs.
+- `--relaxed-variance` enables `AFL_FAST_CAL=1` and `AFL_NO_VAR_CHECK=1` for unstable targets.
+
+Logs land in `fuzzer-dir/logs/`, and AFL++ status UI can be viewed with:
+```bash
+./monitor-fuzzing.sh fuzzer-dir/out-dir
+```
 
 ## Notes
-- Place pre-downloaded tarballs next to the script to avoid network fetches.
-- Builds install under `/usr/local/apache_<mode>/` with the patched `httpd` binary in `bin/`.
-- More background on the original approach: https://0xbigshaq.github.io/2022/03/12/fuzzing-smarter-part2
+- Place pre-downloaded archives alongside the scripts to avoid network fetches.
+- CMPLOG mode expects both `apache_plain` and `apache_cmplog` builds; run both commands above.
+- Original write-up: https://0xbigshaq.github.io/2022/03/12/fuzzing-smarter-part2
