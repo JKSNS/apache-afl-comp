@@ -8,14 +8,37 @@ More info about the base project/journey can be found here: https://0xbigshaq.gi
 
 # Usage
 
-To start the build process against the current httpd release (2.4.66 at the time of writing), run:
+To start the build process against the current httpd release (2.4.66 at the time of writing), follow this workflow:
 
+# 1. Build all variants
 ```
-./afl-toolchain.sh
+BUILD_TYPE=asan ./afl-toolchain.sh
+BUILD_TYPE=cmplog ./afl-toolchain.sh
+BUILD_TYPE=plain ./afl-toolchain.sh
+```
+# 2. Generate input corpus
+```
+./generate-inputs.sh
 ```
 
-To start fuzzing:
+# 3. Start fuzzing
 ```
-cd fuzzer-dir/
-./afl-runner.sh
+./afl-runner-multi.sh
 ```
+
+# 4. Monitor
+```
+./monitor-fuzzing.sh
+```
+
+# 5. Triage findings
+```
+./triage-crashes.sh
+```
+
+# Additional Considerations: 
+
+CPU Affinity: Pin AFL instances to specific cores
+tmpfs: Mount output directory on RAM for speed
+Custom Mutators: Implement HTTP-aware mutations
+Power Schedules: Use -p exploit for crash-heavy inputs, -p fast for exploration
