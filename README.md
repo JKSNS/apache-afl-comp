@@ -12,9 +12,9 @@ To start the build process against the current httpd release (2.4.66 at the time
 
 # 1. Build all variants
 ```
-BUILD_TYPE=asan ./afl-toolchain.sh
-BUILD_TYPE=cmplog ./afl-toolchain.sh
-BUILD_TYPE=plain ./afl-toolchain.sh
+BUILD_TYPE=asan bash afl-toolchain.sh
+BUILD_TYPE=cmplog bash afl-toolchain.sh
+BUILD_TYPE=plain bash afl-toolchain.sh
 ```
 # 2. Generate input corpus
 ```
