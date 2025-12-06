@@ -15,7 +15,7 @@ Other instrumentation presets:
 ```bash
 BUILD_TYPE=cmplog   ./afl-toolchain.sh   # cmpcov companion for differential stage
 BUILD_TYPE=compcov  ./afl-toolchain.sh   # laf-intel/compcov build
-BUILD_TYPE=asan ./afl-toolchain.sh       # asan build
+BUILD_TYPE=asan     ./afl-toolchain.sh   # asan build
 BUILD_TYPE=plain    ./afl-toolchain.sh   # coverage-only baseline
 ```
 
