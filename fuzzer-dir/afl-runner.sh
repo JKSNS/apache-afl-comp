@@ -1,24 +1,86 @@
 #!/bin/bash
 set -euo pipefail
 
+# Configuration 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 INPUT_DIR=${INPUT_DIR:-${SCRIPT_DIR}/input-cases/}
 OUTPUT_DIR=${OUTPUT_DIR:-${SCRIPT_DIR}/out-dir}
 DICTIONARY=${DICTIONARY:-${SCRIPT_DIR}/dict/http_request_fuzzer.dict.txt}
 CONF_FILE=${CONF_FILE:-${SCRIPT_DIR}/conf/default.conf}
-USE_SCREEN=${USE_SCREEN:-0}
-MODE=""
-SECONDARIES=${SECONDARIES:-4}
 FUZZ_ROOT=/tmp/httpd-fuzz-root
+USE_SCREEN=${USE_SCREEN:-0}
+SECONDARIES=${SECONDARIES:-4}
+MODE=""
 
-# Ensure the fuzz root exists and is writable by the daemon user
+# Dynamic User Handling 
+# We need to know who Apache should run as.
+ACTUAL_USER=$(whoami)
+if [[ "$ACTUAL_USER" == "root" ]]; then
+    # Apache cannot run as root, so we must use a low-privilege user
+    APACHE_USER="daemon"
+    APACHE_GROUP="daemon"
+    echo "[*] Running as root. Apache will drop privileges to user: ${APACHE_USER}"
+else
+    # Running as a normal user so Apache should just be that user
+    APACHE_USER="$ACTUAL_USER"
+    APACHE_GROUP=$(id -gn)
+    echo "[*] Running as ${APACHE_USER}. Apache will run with your privileges."
+fi
+
+# Environment Cleanup 
+echo "[*] Cleaning up stale PID files and logs..."
+rm -f /tmp/httpd-fuzz.pid
+rm -rf "${FUZZ_ROOT}"
 mkdir -p "${FUZZ_ROOT}/logs" "${FUZZ_ROOT}/htdocs"
+
+# Create a dummy index if missing
 if [[ ! -f "${FUZZ_ROOT}/htdocs/index.html" ]]; then
     echo "AFL httpd fuzz target" >"${FUZZ_ROOT}/htdocs/index.html"
 fi
-# Fix permissions so Apache (User daemon) can access this
-chown -R daemon:daemon "${FUZZ_ROOT}"
 
+# Dynamic Config Generation 
+# We patch the config file on the fly to match the current user
+echo "[*] Updating ${CONF_FILE} with user ${APACHE_USER}..."
+
+# Remove existing User/Group lines to avoid duplicates
+sed -i '/^User /d' "${CONF_FILE}"
+sed -i '/^Group /d' "${CONF_FILE}"
+
+# Insert correct User/Group at the top
+# If running as root, we MUST set User/Group. 
+# If non-root, we usually don't need to, but setting them to the current user is safe.
+sed -i "1i User ${APACHE_USER}" "${CONF_FILE}"
+sed -i "2i Group ${APACHE_GROUP}" "${CONF_FILE}"
+
+# Fix Permissions so Apache can read/write what it needs
+chown -R "${APACHE_USER}:${APACHE_GROUP}" "${FUZZ_ROOT}"
+chown -R "${APACHE_USER}:${APACHE_GROUP}" "${SCRIPT_DIR}/out-dir" 2>/dev/null || true
+
+# Toolchain Setup 
+HTTPD_ASAN="/usr/local/apache_asan/bin/httpd"
+LIB_ASAN="/usr/local/apache_asan/apr/lib:/usr/local/apache_asan/apr-util/lib:/usr/local/apache_asan/pcre2/lib:/usr/local/apache_asan/expat/lib"
+
+HTTPD_CMPLOG="/usr/local/apache_cmplog/bin/httpd"
+LIB_CMPLOG="/usr/local/apache_cmplog/apr/lib:/usr/local/apache_cmplog/apr-util/lib:/usr/local/apache_cmplog/pcre2/lib:/usr/local/apache_cmplog/expat/lib"
+
+HTTPD_PLAIN="/usr/local/apache_plain/bin/httpd"
+LIB_PLAIN="/usr/local/apache_plain/apr/lib:/usr/local/apache_plain/apr-util/lib:/usr/local/apache_plain/pcre2/lib:/usr/local/apache_plain/expat/lib"
+
+HTTPD_COMPCOV="/usr/local/apache_compcov/bin/httpd"
+LIB_COMPCOV="/usr/local/apache_compcov/apr/lib:/usr/local/apache_compcov/apr-util/lib:/usr/local/apache_compcov/pcre2/lib:/usr/local/apache_compcov/expat/lib"
+
+# Pre-Flight Check
+echo "[*] Performing Pre-Flight Check..."
+# We test the PLAIN build to ensure libraries and config are valid
+if ! LD_LIBRARY_PATH="${LIB_PLAIN}" ${HTTPD_PLAIN} -v >/dev/null 2>&1; then
+    echo "[-] CRITICAL ERROR: Apache failed to start."
+    echo "    Run this command manually to see the error:"
+    echo "    LD_LIBRARY_PATH=\"${LIB_PLAIN}\" ${HTTPD_PLAIN} -X -f \"${CONF_FILE}\""
+    exit 1
+fi
+echo "[+] Pre-Flight Check Passed: Apache can load libraries."
+
+# --- Argument Parsing ---
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --mode) MODE=${2:-}; shift 2 ;;
@@ -30,19 +92,6 @@ while [[ $# -gt 0 ]]; do
         *) echo "[!] Unknown arg: $1"; exit 1 ;;
     esac
 done
-
-# Define binary paths and their specific library paths
-HTTPD_ASAN=/usr/local/apache_asan/bin/httpd
-LIB_ASAN="/usr/local/apache_asan/apr/lib:/usr/local/apache_asan/apr-util/lib:/usr/local/apache_asan/pcre2/lib:/usr/local/apache_asan/expat/lib"
-
-HTTPD_CMPLOG=/usr/local/apache_cmplog/bin/httpd
-LIB_CMPLOG="/usr/local/apache_cmplog/apr/lib:/usr/local/apache_cmplog/apr-util/lib:/usr/local/apache_cmplog/pcre2/lib:/usr/local/apache_cmplog/expat/lib"
-
-HTTPD_PLAIN=/usr/local/apache_plain/bin/httpd
-LIB_PLAIN="/usr/local/apache_plain/apr/lib:/usr/local/apache_plain/apr-util/lib:/usr/local/apache_plain/pcre2/lib:/usr/local/apache_plain/expat/lib"
-
-HTTPD_COMPCOV=/usr/local/apache_compcov/bin/httpd
-LIB_COMPCOV="/usr/local/apache_compcov/apr/lib:/usr/local/apache_compcov/apr-util/lib:/usr/local/apache_compcov/pcre2/lib:/usr/local/apache_compcov/expat/lib"
 
 AVAILABLE_BUILDS=()
 [[ -x "$HTTPD_ASAN" ]] && AVAILABLE_BUILDS+=("asan")
@@ -61,11 +110,11 @@ if [[ -z "$MODE" ]]; then
     else MODE=${AVAILABLE_BUILDS[0]}; fi
 fi
 
+# Tunables
 export AFL_MAP_SIZE=262144
 export AFL_SKIP_CPUFREQ=1
 export AFL_DISABLE_TRIM=1
 export AFL_AUTORESUME=1
-# Suppress ASan warnings
 export ASAN_OPTIONS=detect_leaks=0:abort_on_error=1:symbolize=0:allocator_may_return_null=1
 
 pkill -9 afl-fuzz 2>/dev/null || true
