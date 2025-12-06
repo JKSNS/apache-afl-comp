@@ -28,14 +28,21 @@ case "$BUILD_TYPE" in
         PREFIX=/usr/local/apache_cmplog
         ;;
     compcov)
+        export AFL_CC=/usr/lib/llvm-17/bin/clang
+        export AFL_CXX=/usr/lib/llvm-17/bin/clang++
         export CC=afl-clang-lto
         export CXX=afl-clang-lto++
-        export AFL_LLVM_LAF_ALL=1
-        export AR=llvm-ar
-        export NM=llvm-nm
-        export RANLIB=llvm-ranlib
-        export CFLAGS="-O2 -g -std=gnu99 -Wno-error=declaration-after-statement"
-        export CXXFLAGS="-O2 -g -Wno-error=declaration-after-statement"
+        
+        export AFL_LLVM_LAF_SPLIT_SWITCHES=1
+        export AFL_LLVM_LAF_SPLIT_COMPARES=1
+        export AFL_LLVM_LAF_TRANSFORM_COMPARES=1
+        
+        export AR=/usr/lib/llvm-17/bin/llvm-ar
+        export NM=/usr/lib/llvm-17/bin/llvm-nm
+        export RANLIB=/usr/lib/llvm-17/bin/llvm-ranlib
+        
+        export CFLAGS="-O1 -g -std=gnu99 -Wno-error=declaration-after-statement"
+        export CXXFLAGS="-O1 -g -Wno-error=declaration-after-statement"
         export LDFLAGS="-lm"
         PREFIX=/usr/local/apache_compcov
         ;;
@@ -54,12 +61,6 @@ case "$BUILD_TYPE" in
 esac
 
 DEPS_DIR="deps-dir-${BUILD_TYPE}"
-
-# Use non-instrumented compilers for third-party dependencies to avoid AFL
-# runtime symbols (e.g., __afl_area_ptr) leaking into shared objects and
-# breaking relinking steps. httpd itself is still built with the AFL
-# instrumented compiler chosen above. We also strip AFL instrumentation
-# environment variables from dependency builds to keep them "clean".
 DEP_CC=${DEP_CC:-clang}
 DEP_CXX=${DEP_CXX:-clang++}
 
@@ -201,6 +202,9 @@ fi
 echo "[*] Applying fuzzing patches..."
 chmod +x ../insert-fuzz.py
 ../insert-fuzz.py
+
+echo "[*] Patching missing fuzz_constant_seed in server/core.c..."
+sed -i '1s/^/const char *fuzz_constant_seed = "fuzz";\n/' server/core.c
 
 # Configure Apache
 echo "[*] Configuring Apache httpd..."
