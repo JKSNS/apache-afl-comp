@@ -19,17 +19,18 @@ BUILD_TYPE=plain bash afl-toolchain.sh
 
 # 2. Start fuzzing
 ```
-./afl-runner-multi.sh
+cd fuzzer-dir
+bash afl-runner-multi.sh
 ```
 
 # 3. Monitor
 ```
-./monitor-fuzzing.sh
+bash monitor-fuzzing.sh
 ```
 
 # 4. Triage findings
 ```
-./triage-crashes.sh
+bash triage-crashes.sh
 ```
 
 # Additional Considerations: 
