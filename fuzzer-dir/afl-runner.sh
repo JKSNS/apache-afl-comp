@@ -11,63 +11,39 @@ MODE=""
 SECONDARIES=${SECONDARIES:-4}
 FUZZ_ROOT=/tmp/httpd-fuzz-root
 
-# Point to the specific dependency folders where the toolchain installed them
-PREFIX="/usr/local/apache_plain"
-export LD_LIBRARY_PATH="${PREFIX}/apr/lib:${PREFIX}/apr-util/lib:${PREFIX}/pcre2/lib:${PREFIX}/expat/lib:${LD_LIBRARY_PATH:-}"
-
+# Ensure the fuzz root exists and is writable by the daemon user
 mkdir -p "${FUZZ_ROOT}/logs" "${FUZZ_ROOT}/htdocs"
 if [[ ! -f "${FUZZ_ROOT}/htdocs/index.html" ]]; then
     echo "AFL httpd fuzz target" >"${FUZZ_ROOT}/htdocs/index.html"
 fi
+# Fix permissions so Apache (User daemon) can access this
+chown -R daemon:daemon "${FUZZ_ROOT}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --mode)
-            MODE=${2:-}
-            shift 2
-            ;;
-        --secondaries|-s|--secondaires)
-            SECONDARIES=${2:-0}
-            shift 2
-            ;;
-        --screen)
-            USE_SCREEN=1
-            shift
-            ;;
-        --no-screen)
-            USE_SCREEN=0
-            shift
-            ;;
-        --output)
-            OUTPUT_DIR=${2:-${OUTPUT_DIR}}
-            shift 2
-            ;;
-        --input)
-            INPUT_DIR=${2:-${INPUT_DIR}}
-            shift 2
-            ;;
-        --conf)
-            CONF_FILE=${2:-${CONF_FILE}}
-            shift 2
-            ;;
-        --dict)
-            DICTIONARY=${2:-${DICTIONARY}}
-            shift 2
-            ;;
-        *)
-            echo "[!] Unknown argument: $1"
-            echo "    Supported: --mode (asan|cmplog|compcov|plain), --secondaries N, --screen, --no-screen, --output DIR, --input DIR, --conf FILE, --dict FILE"
-            exit 1
-            ;;
+        --mode) MODE=${2:-}; shift 2 ;;
+        --secondaries|-s) SECONDARIES=${2:-0}; shift 2 ;;
+        --screen) USE_SCREEN=1; shift ;;
+        --no-screen) USE_SCREEN=0; shift ;;
+        --output) OUTPUT_DIR=${2:-${OUTPUT_DIR}}; shift 2 ;;
+        --input) INPUT_DIR=${2:-${INPUT_DIR}}; shift 2 ;;
+        *) echo "[!] Unknown arg: $1"; exit 1 ;;
     esac
 done
 
+# Define binary paths and their specific library paths
 HTTPD_ASAN=/usr/local/apache_asan/bin/httpd
-HTTPD_CMPLOG=/usr/local/apache_cmplog/bin/httpd
-HTTPD_PLAIN=/usr/local/apache_plain/bin/httpd
-HTTPD_COMPCOV=/usr/local/apache_compcov/bin/httpd
+LIB_ASAN="/usr/local/apache_asan/apr/lib:/usr/local/apache_asan/apr-util/lib:/usr/local/apache_asan/pcre2/lib:/usr/local/apache_asan/expat/lib"
 
-# Detect available binaries
+HTTPD_CMPLOG=/usr/local/apache_cmplog/bin/httpd
+LIB_CMPLOG="/usr/local/apache_cmplog/apr/lib:/usr/local/apache_cmplog/apr-util/lib:/usr/local/apache_cmplog/pcre2/lib:/usr/local/apache_cmplog/expat/lib"
+
+HTTPD_PLAIN=/usr/local/apache_plain/bin/httpd
+LIB_PLAIN="/usr/local/apache_plain/apr/lib:/usr/local/apache_plain/apr-util/lib:/usr/local/apache_plain/pcre2/lib:/usr/local/apache_plain/expat/lib"
+
+HTTPD_COMPCOV=/usr/local/apache_compcov/bin/httpd
+LIB_COMPCOV="/usr/local/apache_compcov/apr/lib:/usr/local/apache_compcov/apr-util/lib:/usr/local/apache_compcov/pcre2/lib:/usr/local/apache_compcov/expat/lib"
+
 AVAILABLE_BUILDS=()
 [[ -x "$HTTPD_ASAN" ]] && AVAILABLE_BUILDS+=("asan")
 [[ -x "$HTTPD_CMPLOG" ]] && AVAILABLE_BUILDS+=("cmplog")
@@ -75,123 +51,84 @@ AVAILABLE_BUILDS=()
 [[ -x "$HTTPD_COMPCOV" ]] && AVAILABLE_BUILDS+=("compcov")
 
 if [[ ${#AVAILABLE_BUILDS[@]} -eq 0 ]]; then
-    echo "[!] No Apache builds found. Run afl-toolchain.sh first."
+    echo "[!] No Apache builds found."
     exit 1
 fi
 
-echo "[*] Available builds: ${AVAILABLE_BUILDS[*]}"
-
-if [[ ${USE_SCREEN} -eq 1 ]] && ! command -v screen >/dev/null 2>&1; then
-    echo "[!] screen is not installed. Re-run with USE_SCREEN=0 or install it (apt-get install screen)."
-    exit 1
+if [[ -z "$MODE" ]]; then
+    if [[ " ${AVAILABLE_BUILDS[*]} " =~ " plain " ]]; then MODE=plain;
+    elif [[ " ${AVAILABLE_BUILDS[*]} " =~ " asan " ]]; then MODE=asan;
+    else MODE=${AVAILABLE_BUILDS[0]}; fi
 fi
 
-if [[ -n "$MODE" ]]; then
-    if [[ ! " ${AVAILABLE_BUILDS[*]} " =~ " ${MODE} " ]]; then
-        echo "[!] Requested mode '${MODE}' is not available. Built modes: ${AVAILABLE_BUILDS[*]}"
-        exit 1
-    fi
-else
-    # Auto-select preference
-    if [[ " ${AVAILABLE_BUILDS[*]} " =~ " plain " ]]; then
-        MODE=plain
-    elif [[ " ${AVAILABLE_BUILDS[*]} " =~ " asan " ]]; then
-        MODE=asan
-    else
-        MODE=${AVAILABLE_BUILDS[0]}
-    fi
-fi
-
-# Tunables for stability
 export AFL_MAP_SIZE=262144
 export AFL_SKIP_CPUFREQ=1
 export AFL_DISABLE_TRIM=1
 export AFL_AUTORESUME=1
-# Force ASan to be less whiny during startup
+# Suppress ASan warnings
 export ASAN_OPTIONS=detect_leaks=0:abort_on_error=1:symbolize=0:allocator_may_return_null=1
 
-# Kill existing AFL instances
 pkill -9 afl-fuzz 2>/dev/null || true
 sleep 1
 
 start_session() {
     local name="$1"; shift
     local cmd="$*"
-
     if [[ ${USE_SCREEN} -eq 1 ]]; then
         screen -dmS "${name}" bash -c "${cmd}"
-        SESSIONS+=("${name}")
     else
         nohup bash -c "${cmd}" >"${FUZZ_ROOT}/logs/${name}.log" 2>&1 &
     fi
 }
 
-build_master_cmd() {
-    local target_bin="$1"; shift
-    local cmp_target="$1"; shift
-    local env_prefix="$1"; shift
+build_cmd() {
+    local is_master="$1"; shift
+    local name="$1"; shift
+    local bin="$1"; shift
+    local lib_path="$1"; shift
+    local strategy="$1"; shift
+    local helper_bin="$2" # Optional
 
-    local extra_cmp=""
-    if [[ -n "$cmp_target" ]]; then
-        extra_cmp="-c ${cmp_target}"
+    local env_prefix="LD_LIBRARY_PATH=${lib_path} "
+    local args="-t 2000+ -m none -i '${INPUT_DIR}' -o '${OUTPUT_DIR}'"
+    
+    # Master specific args
+    if [[ "$is_master" == "1" ]]; then
+        args="${args} -M master -x '${DICTIONARY}' AFL_FINAL_SYNC=1"
+        if [[ -n "$helper_bin" ]]; then
+            args="${args} -c '${helper_bin}'"
+        fi
+    else
+        args="${args} -S ${name} -p ${strategy}"
     fi
 
-    echo "${env_prefix} AFL_FINAL_SYNC=1 afl-fuzz -M master ${extra_cmp} -t 2000+ -m none -i '${INPUT_DIR}' -o '${OUTPUT_DIR}' -x '${DICTIONARY}' -- '${target_bin}' -X -f '${CONF_FILE}'"
+    echo "${env_prefix} afl-fuzz ${args} -- '${bin}' -X -f '${CONF_FILE}'"
 }
 
-build_slave_cmd() {
-    local name="$1"; shift
-    local target_bin="$1"; shift
-    local env_prefix="$1"; shift
-    local strategy="$1"; shift
-
-    echo "${env_prefix} afl-fuzz -S ${name} -p ${strategy} -t 2000+ -m none -i '${INPUT_DIR}' -o '${OUTPUT_DIR}' -- '${target_bin}' -X -f '${CONF_FILE}'"
-}
-
+# Select Master
 MASTER_BIN=""
-CMPLOG_HELPER=""
-MASTER_ENV=""
-MASTER_CMD=""
-
+MASTER_LIB=""
+CMPLOG_BIN=""
 case "$MODE" in
     cmplog)
-        if [[ -x "$HTTPD_PLAIN" && -x "$HTTPD_CMPLOG" ]]; then
-            MASTER_BIN="$HTTPD_PLAIN"
-            CMPLOG_HELPER="$HTTPD_CMPLOG"
-        elif [[ -x "$HTTPD_CMPLOG" ]]; then
-            MASTER_BIN="$HTTPD_CMPLOG"
-        elif [[ -x "$HTTPD_PLAIN" ]]; then
-            MASTER_BIN="$HTTPD_PLAIN"
-        fi
+        MASTER_BIN="$HTTPD_PLAIN"; MASTER_LIB="$LIB_PLAIN"; CMPLOG_BIN="$HTTPD_CMPLOG"
+        [[ ! -x "$HTTPD_PLAIN" ]] && { MASTER_BIN="$HTTPD_CMPLOG"; MASTER_LIB="$LIB_CMPLOG"; }
         ;;
-    plain)
-        MASTER_BIN="$HTTPD_PLAIN"
-        ;;
-    compcov)
-        MASTER_BIN="$HTTPD_COMPCOV"
-        ;;
-    asan)
-        MASTER_BIN="$HTTPD_ASAN"
-        ;;
+    plain) MASTER_BIN="$HTTPD_PLAIN"; MASTER_LIB="$LIB_PLAIN" ;;
+    compcov) MASTER_BIN="$HTTPD_COMPCOV"; MASTER_LIB="$LIB_COMPCOV" ;;
+    asan) MASTER_BIN="$HTTPD_ASAN"; MASTER_LIB="$LIB_ASAN" ;;
 esac
 
-if [[ -z "$MASTER_BIN" || ! -x "$MASTER_BIN" ]]; then
-    echo "[!] No binary available for mode '${MODE}'. Built modes: ${AVAILABLE_BUILDS[*]}"
-    exit 1
-fi
+echo "[*] Starting master (${MODE})..."
+start_session "afl-master" "$(build_cmd 1 "master" "$MASTER_BIN" "$MASTER_LIB" "deterministic" "$CMPLOG_BIN")"
 
-echo "[*] Selected mode: ${MODE}"
-
-MASTER_CMD=$(build_master_cmd "${MASTER_BIN}" "${CMPLOG_HELPER}" "${MASTER_ENV}")
-
-SESSIONS=()
+# Start Slaves
 SLAVE_COUNT=0
-
 declare -a SLAVE_TARGETS=()
-if [[ -x "$HTTPD_ASAN" ]]; then SLAVE_TARGETS+=("asan"); fi
-if [[ -x "$HTTPD_PLAIN" ]]; then SLAVE_TARGETS+=("plain"); fi
-if [[ -x "$HTTPD_CMPLOG" ]]; then SLAVE_TARGETS+=("cmplog"); fi
-if [[ -x "$HTTPD_COMPCOV" ]]; then SLAVE_TARGETS+=("compcov"); fi
+[[ -x "$HTTPD_ASAN" ]] && SLAVE_TARGETS+=("asan")
+[[ -x "$HTTPD_PLAIN" ]] && SLAVE_TARGETS+=("plain")
+[[ -x "$HTTPD_CMPLOG" ]] && SLAVE_TARGETS+=("cmplog")
+[[ -x "$HTTPD_COMPCOV" ]] && SLAVE_TARGETS+=("compcov")
 
 if [[ ${SECONDARIES} -gt 0 && ${#SLAVE_TARGETS[@]} -gt 0 ]]; then
     for i in $(seq 1 ${SECONDARIES}); do
@@ -200,68 +137,22 @@ if [[ ${SECONDARIES} -gt 0 && ${#SLAVE_TARGETS[@]} -gt 0 ]]; then
         SLAVE_COUNT=$((SLAVE_COUNT + 1))
         name="slave${SLAVE_COUNT}"
         
-        env_prefix=""
-        strategy="fast"
-        bin=""
-
         case "$target" in
-            asan)
-                strategy="exploit"
-                bin="$HTTPD_ASAN"
-                ;;
-            plain)
-                strategy="fast"
-                bin="$HTTPD_PLAIN"
-                ;;
-            cmplog)
-                strategy="explore"
-                bin="$HTTPD_CMPLOG"
-                ;;
-            compcov)
-                strategy="coe"
-                bin="$HTTPD_COMPCOV"
-                ;;
+            asan)    start_session "afl-${name}" "$(build_cmd 0 "$name" "$HTTPD_ASAN" "$LIB_ASAN" "exploit")" ;;
+            plain)   start_session "afl-${name}" "$(build_cmd 0 "$name" "$HTTPD_PLAIN" "$LIB_PLAIN" "fast")" ;;
+            cmplog)  start_session "afl-${name}" "$(build_cmd 0 "$name" "$HTTPD_CMPLOG" "$LIB_CMPLOG" "explore")" ;;
+            compcov) start_session "afl-${name}" "$(build_cmd 0 "$name" "$HTTPD_COMPCOV" "$LIB_COMPCOV" "coe")" ;;
         esac
-
-        if [[ ! -x "$bin" ]]; then
-            continue
-        fi
-
-        echo "[*] Starting ${target} ${name}..."
-        start_session "afl-${name}" "$(build_slave_cmd "${name}" "${bin}" "${env_prefix}" "${strategy}")"
+        echo "[*] Started ${target} slave: ${name}"
         sleep 1
     done
 fi
 
-echo "[*] Starting master with $(basename "${MASTER_BIN}")${CMPLOG_HELPER:+ (+cmplog helper)}..."
-if [[ ${USE_SCREEN} -eq 1 ]]; then
-    start_session "afl-master" "${MASTER_CMD}"
-else
-    echo ""
-    echo "[+] Attaching master..."
-    echo ""
-fi
-
-sleep 1
-
-echo "[+] Started $((SLAVE_COUNT + 1)) AFL instances"
-echo "[+] Master: using $(basename "${MASTER_BIN}")"
-echo "[+] Output: ${OUTPUT_DIR}"
-echo ""
-if [[ ${USE_SCREEN} -eq 1 ]]; then
-    echo "Monitor with:"
-    echo "  screen -r afl-master    # View master"
-    echo "  screen -ls              # List all"
-else
-    echo "Master is running in the foreground. Use Ctrl+C to stop it."
-    echo "Slave logs (if any) are under ${FUZZ_ROOT}/logs/*.log"
-fi
-echo "  afl-whatsup ${OUTPUT_DIR}  # Summary"
-echo ""
-echo "Stop all with:"
-echo "  pkill -9 afl-fuzz"
-
 echo ""
 if [[ ${USE_SCREEN} -eq 0 ]]; then
-    exec bash -c "${MASTER_CMD}"
+    echo "[+] Fuzzing has started. Master log is tailing below."
+    echo "[+] Press Ctrl+C to stop."
+    sleep 2
+    # Determine which log file to tail
+    tail -f "${FUZZ_ROOT}/logs/afl-master.log"
 fi
