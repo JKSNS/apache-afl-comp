@@ -1,16 +1,9 @@
-# apache-afl
+# apache-afl-comp
 
 This fork extends **0xbigshaq**'s Apache fuzzing automation to newer httpd and AFL++ releases. It downloads, patches, and builds Apache httpd with AFL++ instrumentation, plus the deps it needs (APR, APR-util, Expat, PCRE2) in isolated prefixes.
 
 ## Prerequisites
 - AFL++ with `afl-clang-fast` and `afl-clang-lto` on PATH
-- Internet access for downloads (or place the tarballs next to the scripts)
-- Debian/Ubuntu toolchain packages (installed automatically unless you opt out)
-
-If your environment blocks `apt`, reuse pre-installed packages:
-```bash
-SKIP_APT=1 ./afl-toolchain.sh
-```
 
 ## Build httpd (copy/paste)
 Default AddressSanitizer build:
@@ -59,4 +52,3 @@ Logs land in `fuzzer-dir/logs/`, and AFL++ status UI can be viewed with:
 ## Notes
 - Place pre-downloaded archives alongside the scripts to avoid network fetches.
 - CMPLOG mode expects both `apache_plain` and `apache_cmplog` builds; run both commands above.
-- Original write-up: https://0xbigshaq.github.io/2022/03/12/fuzzing-smarter-part2
