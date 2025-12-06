@@ -16,22 +16,18 @@ BUILD_TYPE=asan bash afl-toolchain.sh
 BUILD_TYPE=cmplog bash afl-toolchain.sh
 BUILD_TYPE=plain bash afl-toolchain.sh
 ```
-# 2. Generate input corpus
-```
-./generate-inputs.sh
-```
 
-# 3. Start fuzzing
+# 2. Start fuzzing
 ```
 ./afl-runner-multi.sh
 ```
 
-# 4. Monitor
+# 3. Monitor
 ```
 ./monitor-fuzzing.sh
 ```
 
-# 5. Triage findings
+# 4. Triage findings
 ```
 ./triage-crashes.sh
 ```
