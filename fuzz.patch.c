@@ -1,4 +1,4 @@
-/* AFL fuzzing helpers injected into httpd */
+/* AFL fuzzing helpers injected into httpd, ONE SHOT MODE */
 
 #include <pthread.h>
 #include <unistd.h>
@@ -57,42 +57,30 @@ static int send_case_to_httpd(const unsigned char *buf, size_t len) {
 
 static void *fuzzer_thread(void *arg) {
     (void)arg;
-
     signal(SIGTERM, cleanup_handler);
     signal(SIGINT, cleanup_handler);
 
-#ifdef __AFL_HAVE_MANUAL_CONTROL
-    __AFL_INIT();
-#endif
-
+    /* Get data from AFL */
     unsigned char *buf = __AFL_FUZZ_TESTCASE_BUF;
+    int len = __AFL_FUZZ_TESTCASE_LEN;
+    
+    if (len < 0) len = 0;
+    if (len > MAX_INPUT_SIZE) len = MAX_INPUT_SIZE;
 
-    /* Process exactly one request per iteration to keep runs deterministic. */
-    while (__AFL_LOOP(1000)) {
-        int len = __AFL_FUZZ_TESTCASE_LEN;
-        if (len < 0) {
-            len = 0;
-        }
-        if (len > MAX_INPUT_SIZE) {
-            len = MAX_INPUT_SIZE;
-        }
-
-        int attempts = 0;
-        while (attempts < 5) {
-            if (send_case_to_httpd(buf, (size_t)len) >= 0) {
-                break;
-            }
-            /* Allow the listener to catch up before retrying. */
-            usleep(CONNECT_RETRY_USEC);
-            attempts++;
-        }
-
-        if (should_exit) {
+    /* We try to send the data. Whether it works or fails, we exit. */
+    
+    int attempts = 0;
+    while (attempts < 20) {
+        if (send_case_to_httpd(buf, (size_t)len) >= 0) {
             break;
         }
+        /* Allow the listener to catch up */
+        usleep(CONNECT_RETRY_USEC);
+        attempts++;
     }
 
-    should_exit = 1;
+    /* FORCE EXIT so AFL knows we are done */
+    kill(getpid(), SIGTERM);
     return NULL;
 }
 
@@ -107,16 +95,12 @@ static void launch_fuzzy_thread(void) {
         fprintf(stderr, "[!] Failed to create fuzzing thread\n");
         exit(1);
     }
-
     pthread_attr_destroy(&attr);
-
-    /* Give the thread a moment to connect to the listener. */
-    usleep(1000);
 }
 
 __attribute__((constructor))
 static void start_afl_fuzzing(void) {
-    if (getenv("__AFL_SHM_ID") != NULL) {
+    if (getenv("__AFL_SHM_ID") != NULL || getenv("AFL_NO_FORKSRV") != NULL) {
         fprintf(stderr, "[+] AFL detected, launching fuzzing thread\n");
         launch_fuzzy_thread();
     }
