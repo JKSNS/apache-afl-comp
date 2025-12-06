@@ -1,4 +1,4 @@
-# apache-afl
+# apache-afl-comp
 
 This fork builds on the original Apache fuzzing automation by **0xbigshaq**; full credit for the foundational project and write-up belongs to them. The goal here is simply to expand and maintain their work for newer Apache releases and AFL++ improvements.
 
