@@ -50,6 +50,36 @@ Logs land in `fuzzer-dir/logs/`, and AFL++ status UI can be viewed with:
 ./monitor-fuzzing.sh fuzzer-dir/out-dir
 ```
 
+Watch the combined stats of the entire swarm in real-time:
+
+```bash
+# From fuzzer-dir/
+watch -n 1 afl-whatsup ./out-dir/
+```
+
+To view the retro UI for specific nodes:
+
+```bash
+screen -r afl-master   # View Master
+screen -r afl-slave1   # View Slave 1
+```
+
+*Press `Ctrl+A` then `D` to detach without stopping the fuzzer.*
+
+### Key Metrics
+
+  * **Fuzzers Alive: 0** → Normal during startup (Calibration takes 2–10 mins).
+  * **Exec Speed** → `>500/sec` is healthy. `<50/sec` indicates hangs/timeouts.
+  * **Uniq Crashes** → If `>0`, check `out-dir/master/crashes/`.
+
+### Troubleshooting
+
+If stats remain empty after 10 mins, check raw logs:
+
+```bash
+tail -f /tmp/httpd-fuzz-root/logs/afl-master.log
+```
+
 ## Notes
 - Place pre-downloaded archives alongside the scripts to avoid network fetches.
 - CMPLOG mode expects both `apache_plain` and `apache_cmplog` builds; run both commands above.
