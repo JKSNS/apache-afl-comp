@@ -1,6 +1,45 @@
 #!/bin/bash
 set -euo pipefail
 
+BUILD_TYPE=${BUILD_TYPE:-asan}  # asan, cmplog, compcov, or plain
+
+case "$BUILD_TYPE" in
+    asan)
+        export CC=afl-clang-fast
+        export CXX=afl-clang-fast++
+        export CFLAGS="-g -fsanitize=address -fno-sanitize-recover=all -std=gnu99"
+        export CXXFLAGS="-g -fsanitize=address -fno-sanitize-recover=all"
+        export LDFLAGS="-fsanitize=address -fno-sanitize-recover=all -lm"
+        PREFIX=/usr/local/apache_asan
+        ;;
+    cmplog)
+        export CC=afl-clang-fast
+        export CXX=afl-clang-fast++
+        export AFL_LLVM_CMPLOG=1
+        export CFLAGS="-g -std=gnu99"
+        export CXXFLAGS="-g"
+        export LDFLAGS="-lm"
+        PREFIX=/usr/local/apache_cmplog
+        ;;
+    compcov)
+        export CC=afl-clang-lto
+        export CXX=afl-clang-lto++
+        export AFL_LLVM_LAF_ALL=1  # enables COMPCOV
+        export CFLAGS="-g -std=gnu99"
+        export CXXFLAGS="-g"
+        export LDFLAGS="-lm"
+        PREFIX=/usr/local/apache_compcov
+        ;;
+    plain)
+        export CC=afl-clang-fast
+        export CXX=afl-clang-fast++
+        export CFLAGS="-g -std=gnu99"
+        export CXXFLAGS="-g"
+        export LDFLAGS="-lm"
+        PREFIX=/usr/local/apache_plain
+        ;;
+esac
+
 # Current Versions
 HTTPD_VER="2.4.66"
 APR_VER="1.7.6"
