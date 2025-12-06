@@ -85,7 +85,8 @@ static const unsigned char fuzz_constant_seed[8] = {0x78, 0xAB, 0xF5, 0xDB, 0xE2
 """
 
 core_text = core_file.read_text()
-if "fuzz_constant_seed" not in core_text:
+seed_decl_present = re.search(r"fuzz_constant_seed\s*\[", core_text) is not None
+if not seed_decl_present:
     # Prefer to insert right after the httpd.h include, but fall back to the
     # first include if the exact match is missing (httpd sources moved the
     # include in 2.4.66).
