@@ -11,7 +11,9 @@ MODE=""
 SECONDARIES=${SECONDARIES:-4}
 FUZZ_ROOT=/tmp/httpd-fuzz-root
 
-export LD_LIBRARY_PATH="/usr/local/apache_plain/lib:/usr/local/apache_asan/lib:/usr/local/apache_cmplog/lib:/usr/local/apache_compcov/lib:${LD_LIBRARY_PATH:-}"
+# Point to the specific dependency folders where the toolchain installed them
+PREFIX="/usr/local/apache_plain"
+export LD_LIBRARY_PATH="${PREFIX}/apr/lib:${PREFIX}/apr-util/lib:${PREFIX}/pcre2/lib:${PREFIX}/expat/lib:${LD_LIBRARY_PATH:-}"
 
 mkdir -p "${FUZZ_ROOT}/logs" "${FUZZ_ROOT}/htdocs"
 if [[ ! -f "${FUZZ_ROOT}/htdocs/index.html" ]]; then
