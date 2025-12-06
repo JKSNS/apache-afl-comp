@@ -50,6 +50,26 @@ case "$BUILD_TYPE" in
         ;;
 esac
 
+# Use non-instrumented compilers for third-party dependencies to avoid AFL
+# runtime symbols (e.g., __afl_area_ptr) leaking into shared objects and
+# breaking relinking steps. httpd itself is still built with the AFL
+# instrumented compiler chosen above.
+DEP_CC=${DEP_CC:-clang}
+DEP_CXX=${DEP_CXX:-clang++}
+
+case "$BUILD_TYPE" in
+    asan)
+        DEP_CFLAGS="-O2 -g -fsanitize=address -fno-omit-frame-pointer"
+        DEP_CXXFLAGS="-O2 -g -fsanitize=address -fno-omit-frame-pointer"
+        DEP_LDFLAGS="-fsanitize=address"
+        ;;
+    *)
+        DEP_CFLAGS="-O2 -g"
+        DEP_CXXFLAGS="-O2 -g"
+        DEP_LDFLAGS=""
+        ;;
+esac
+
 BUILD_DEPS=(build-essential libtool-bin brotli libbrotli-dev libxml2-dev libssl-dev wget curl xz-utils)
 SKIP_APT=${SKIP_APT:-0}
 
@@ -123,6 +143,8 @@ build_dep() {
 
     cd "${name}"/
     if [[ ! -f Makefile ]]; then
+        CC="${DEP_CC}" CXX="${DEP_CXX}" \
+        CFLAGS="${DEP_CFLAGS}" CXXFLAGS="${DEP_CXXFLAGS}" LDFLAGS="${DEP_LDFLAGS}" \
         ./configure --prefix="${prefix}" ${configure_args}
     fi
     make -j "$(nproc)" && make install
