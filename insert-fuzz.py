@@ -86,5 +86,16 @@ static const unsigned char fuzz_constant_seed[8] = {0x78, 0xAB, 0xF5, 0xDB, 0xE2
 
 core_text = core_file.read_text()
 if "fuzz_constant_seed" not in core_text:
-    core_text = core_text.replace("#include \"httpd.h\"\n", "#include \"httpd.h\"\n\n" + seed_declaration, 1)
-    core_file.write_text(core_text)
+    # Prefer to insert right after the httpd.h include, but fall back to the
+    # first include if the exact match is missing (httpd sources moved the
+    # include in 2.4.66).
+    include_match = re.search(r"#include\s+\"httpd\.h\"\s*\n", core_text)
+    if include_match:
+        insert_at = include_match.end()
+    else:
+        first_include = re.search(r"^#include[^\n]*\n", core_text, re.MULTILINE)
+        if not first_include:
+            raise SystemExit("[!] Could not find an include line in server/core.c")
+        insert_at = first_include.end()
+
+    core_file.write_text(core_text[:insert_at] + "\n" + seed_declaration + core_text[insert_at:])
