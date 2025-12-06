@@ -31,6 +31,9 @@ case "$BUILD_TYPE" in
         export CC=afl-clang-lto
         export CXX=afl-clang-lto++
         export AFL_LLVM_LAF_ALL=1
+        export AR=llvm-ar
+        export NM=llvm-nm
+        export RANLIB=llvm-ranlib
         export CFLAGS="-O2 -g -std=gnu99 -Wno-error=declaration-after-statement"
         export CXXFLAGS="-O2 -g -Wno-error=declaration-after-statement"
         export LDFLAGS="-lm"
@@ -62,9 +65,9 @@ DEP_CXX=${DEP_CXX:-clang++}
 
 case "$BUILD_TYPE" in
     asan)
-        DEP_CFLAGS="-O2 -g -fsanitize=address -fno-omit-frame-pointer"
-        DEP_CXXFLAGS="-O2 -g -fsanitize=address -fno-omit-frame-pointer"
-        DEP_LDFLAGS="-fsanitize=address"
+        DEP_CFLAGS="-O2 -g"
+        DEP_CXXFLAGS="-O2 -g"
+        DEP_LDFLAGS=""
         ;;
     *)
         DEP_CFLAGS="-O2 -g"
@@ -72,6 +75,9 @@ case "$BUILD_TYPE" in
         DEP_LDFLAGS=""
         ;;
 esac
+
+DEP_CFLAGS+=" -Wno-deprecated-non-prototype"
+DEP_CXXFLAGS+=" -Wno-deprecated-non-prototype"
 
 BUILD_DEPS=(build-essential libtool-bin brotli libbrotli-dev libxml2-dev libssl-dev wget curl xz-utils)
 SKIP_APT=${SKIP_APT:-0}
