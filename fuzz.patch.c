@@ -1,3 +1,4 @@
+cat > fuzz.patch.c << 'EOF'
 /* AFL fuzzing helpers injected into httpd */
 
 #include <pthread.h>
@@ -104,3 +105,4 @@ static void start_afl_fuzzing(void) {
         launch_fuzzy_thread();
     }
 }
+EOF
